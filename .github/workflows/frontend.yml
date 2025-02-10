@@ -1,0 +1,67 @@
+name: Next.js Multi-Stage CI/CD
+
+on:
+  push:
+    branches:
+      - develop
+      - "release/*"
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🛠 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: 🔨 Build Next.js
+        working-directory: frontend
+        run: npm run build
+
+      - name: ✅ Run Tests
+        working-directory: frontend
+        run: npm test
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'PROD' || (startsWith(github.ref, 'refs/heads/release/') && 'QA') || 'DEV' }}
+    steps:
+      - name: 🚀 Deploy to AWS S3 (Production Only)
+        if: github.ref == 'refs/heads/main'
+        uses: jakejarvis/s3-sync-action@v0.5.1
+        with:
+          args: --acl public-read --delete
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: 🚀 Deploy to Azure Static Web Apps (QA)
+        if: startsWith(github.ref, 'refs/heads/release/')
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_TOKEN }}
+          action: upload
+
+      - name: 🚀 Deploy to Google Cloud Storage (DEV)
+        if: github.ref == 'refs/heads/develop'
+        uses: google-github-actions/upload-cloud-storage@v1
+        with:
+          credentials: ${{ secrets.GCP_SA_KEY }}
+          bucket: ${{ secrets.GCP_BUCKET }}
+
+      - name: 🚀 Deploy to Strator (QA)
+        if: startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          curl -X POST "https://api.strator.io/deploy" -H "Authorization: Bearer ${{ secrets.STRATOR_API_KEY }}" -d "{}"
+
+      - name: 🚀 Deploy to IONOS (PROD)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          curl -X POST "https://api.ionos.com/deploy" -H "Authorization: Bearer ${{ secrets.IONOS_API_KEY }}" -d "{}"

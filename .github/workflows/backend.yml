@@ -1,0 +1,72 @@
+name: Strapi Multi-Stage CI/CD
+
+on:
+  push:
+    branches:
+      - develop
+      - "release/*"
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🛠 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Install dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: 🔨 Build Strapi
+        working-directory: backend
+        run: npm run build
+
+      - name: ✅ Run Tests
+        working-directory: backend
+        run: npm test
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'PROD' || (startsWith(github.ref, 'refs/heads/release/') && 'QA') || 'DEV' }}
+    steps:
+      - name: 🚀 Deploy to AWS EC2 (Production Only)
+        if: github.ref == 'refs/heads/main'
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.AWS_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script: |
+            cd /var/www/strapi
+            git pull origin main
+            npm install
+            npm run build
+            pm2 restart strapi
+
+      - name: 🚀 Deploy to Azure App Service (QA)
+        if: startsWith(github.ref, 'refs/heads/release/')
+        uses: Azure/webapps-deploy@v2
+        with:
+          app-name: "strapi-app"
+          publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
+          package: backend
+
+      - name: 🚀 Deploy to Google Cloud Run (DEV)
+        if: github.ref == 'refs/heads/develop'
+        uses: google-github-actions/deploy-cloudrun@v1
+        with:
+          service: strapi-app
+          image: gcr.io/${{ secrets.GCP_PROJECT }}/strapi
+
+      - name: 🚀 Deploy to Strator (QA)
+        if: startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          curl -X POST "https://api.strator.io/deploy" -H "Authorization: Bearer ${{ secrets.STRATOR_API_KEY }}" -d "{}"
+
+      - name: 🚀 Deploy to IONOS (PROD)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          curl -X POST "https://api.ionos.com/deploy" -H "Authorization: Bearer ${{ secrets.IONOS_API_KEY }}" -d "{}"
